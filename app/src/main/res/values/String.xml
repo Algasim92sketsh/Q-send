@@ -1,0 +1,23 @@
+<resources>
+    <string name="app_name">ناقل الملفات</string>
+    <string name="send">إرسال</string>
+    <string name="receive">استقبال</string>
+    <string name="about">حول التطبيق</string>
+    <string name="about_title">حول ناقل الملفات</string>
+    <string name="about_description">
+        تطبيق ناقل الملفات الاحترافي.
+        صممه وطوره المبرمج والمصمم: أبوالقاسم معتصم الخير.
+        يهدف التطبيق إلى نقل الصور والفيديوهات والمستندات وجهات الاتصال بجودتها الأصلية دون أي ضغط أو فقدان، مع إمكانية استئناف النقل والتشفير الكامل. يعمل التطبيق دون اتصال بالإنترنت عبر شبكة Wi-Fi المباشرة.
+        تم تطويره بأحدث التقنيات المفتوحة المصدر لضمان السرعة والأمان والموثوقية.
+    </string>
+    <string name="status_waiting">في انتظار الاتصال...</string>
+    <string name="status_sending">جارٍ الإرسال...</string>
+    <string name="status_receiving">جارٍ الاستلام...</string>
+    <string name="status_error">حدث خطأ: %s</string>
+    <string name="status_done">اكتمل النقل بنجاح!</string>
+    <string name="contact_exported">تم تصدير جهات الاتصال بنجاح</string>
+    <string name="choose_file">اختر ملفاً للإرسال</string>
+    <string name="enter_ip">أدخل عنوان IP الجهاز المستقبل</string>
+    <string name="resume">استئناف</string>
+    <string name="cancel">إلغاء</string>
+</resources>
