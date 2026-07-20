@@ -1,0 +1,184 @@
+package com.abualqasim.transferpro
+
+import android.content.Context
+import android.net.Uri
+import android.provider.ContactsContract
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.*
+import java.net.ServerSocket
+import java.net.Socket
+import javax.crypto.Cipher
+import javax.crypto.spec.SecretKeySpec
+
+class FileTransferManager(private val context: Context) {
+
+    companion object {
+        private const val BUFFER_SIZE = 8192
+        private const val CHARSET = "UTF-8"
+        private const val AES_KEY = "0123456789abcdef"
+    }
+
+    private fun encryptData(data: ByteArray): ByteArray {
+        val keySpec = SecretKeySpec(AES_KEY.toByteArray(CHARSET), "AES")
+        val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, keySpec)
+        return cipher.doFinal(data)
+    }
+
+    private fun decryptData(data: ByteArray): ByteArray {
+        val keySpec = SecretKeySpec(AES_KEY.toByteArray(CHARSET), "AES")
+        val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
+        cipher.init(Cipher.DECRYPT_MODE, keySpec)
+        return cipher.doFinal(data)
+    }
+
+    suspend fun sendFile(ip: String, port: Int, uri: Uri, offset: Long = 0, listener: (Float, Long) -> Unit) {
+        withContext(Dispatchers.IO) {
+            var socket: Socket? = null
+            var inputStream: InputStream? = null
+            var outputStream: OutputStream? = null
+            try {
+                socket = Socket(ip, port)
+                outputStream = socket.getOutputStream()
+                val dataOutput = DataOutputStream(outputStream)
+
+                val fileSize = context.contentResolver.openInputStream(uri)?.available() ?: 0L
+                val fileName = getFileName(uri) ?: "file.bin"
+
+                dataOutput.writeUTF(fileName)
+                dataOutput.writeLong(fileSize)
+                dataOutput.writeLong(offset)
+                dataOutput.flush()
+
+                inputStream = context.contentResolver.openInputStream(uri)
+                inputStream?.skip(offset)
+
+                val buffer = ByteArray(BUFFER_SIZE)
+                var bytesRead: Int
+                var totalRead = offset
+
+                while (inputStream?.read(buffer).also { bytesRead = it ?: -1 } != -1) {
+                    val encrypted = encryptData(buffer.copyOf(bytesRead))
+                    dataOutput.writeInt(encrypted.size)
+                    dataOutput.write(encrypted)
+                    dataOutput.flush()
+
+                    totalRead += bytesRead
+                    listener.invoke(totalRead.toFloat() / fileSize.toFloat(), totalRead)
+                }
+                dataOutput.writeInt(-1)
+                dataOutput.flush()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                throw e
+            } finally {
+                inputStream?.close()
+                outputStream?.close()
+                socket?.close()
+            }
+        }
+    }
+
+    suspend fun receiveFile(port: Int, saveDir: File, listener: (Float, String, Boolean) -> Unit) {
+        withContext(Dispatchers.IO) {
+            var serverSocket: ServerSocket? = null
+            var socket: Socket? = null
+            var inputStream: InputStream? = null
+            var randomAccessFile: RandomAccessFile? = null
+            try {
+                serverSocket = ServerSocket(port)
+                socket = serverSocket.accept()
+                inputStream = socket.getInputStream()
+                val dataInput = DataInputStream(inputStream)
+
+                val fileName = dataInput.readUTF()
+                val fileSize = dataInput.readLong()
+                val offset = dataInput.readLong()
+
+                val saveFile = File(saveDir, fileName)
+                randomAccessFile = RandomAccessFile(saveFile, "rw")
+                randomAccessFile.seek(offset)
+
+                var totalRead = offset
+                var encryptedSize: Int
+
+                while (dataInput.readInt().also { encryptedSize = it } != -1) {
+                    val encryptedData = ByteArray(encryptedSize)
+                    dataInput.readFully(encryptedData)
+                    val decrypted = decryptData(encryptedData)
+                    randomAccessFile.write(decrypted)
+                    totalRead += decrypted.size
+                    val progress = totalRead.toFloat() / fileSize.toFloat()
+                    listener.invoke(progress, fileName, totalRead >= fileSize)
+                }
+
+                val output = socket.getOutputStream()
+                output.write("DONE".toByteArray())
+                output.flush()
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                throw e
+            } finally {
+                randomAccessFile?.close()
+                inputStream?.close()
+                socket?.close()
+                serverSocket?.close()
+            }
+        }
+    }
+
+    fun exportContactsAsVcf(): File? {
+        val cursor = context.contentResolver.query(
+            ContactsContract.Contacts.CONTENT_URI,
+            null, null, null, null
+        ) ?: return null
+
+        val vcfFile = File(context.cacheDir, "contacts_${System.currentTimeMillis()}.vcf")
+        val writer = BufferedWriter(FileWriter(vcfFile))
+
+        cursor.use {
+            if (it.moveToFirst()) {
+                do {
+                    val id = it.getString(it.getColumnIndex(ContactsContract.Contacts._ID))
+                    val name = it.getString(it.getColumnIndex(ContactsContract.Contacts.DISPLAY_NAME))
+                    val phoneCursor = context.contentResolver.query(
+                        ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                        null,
+                        ContactsContract.CommonDataKinds.Phone.CONTACT_ID + " = ?",
+                        arrayOf(id), null
+                    )
+                    val phones = StringBuilder()
+                    phoneCursor?.use { pc ->
+                        while (pc.moveToNext()) {
+                            val number = pc.getString(pc.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER))
+                            phones.append(";").append(number.replace(" ", ""))
+                        }
+                    }
+                    writer.write("BEGIN:VCARD\n")
+                    writer.write("VERSION:3.0\n")
+                    writer.write("FN:$name\n")
+                    if (phones.isNotEmpty()) {
+                        writer.write("TEL:$phones\n")
+                    }
+                    writer.write("END:VCARD\n")
+                } while (it.moveToNext())
+            }
+        }
+        writer.close()
+        return vcfFile
+    }
+
+    private fun getFileName(uri: Uri): String? {
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val nameIndex = it.getColumnIndex("_display_name")
+                if (nameIndex != -1) return it.getString(nameIndex)
+            }
+        }
+        return uri.path?.substringAfterLast('/')
+    }
+}
